@@ -7,15 +7,15 @@ export type PhoneMsg = { from: string; text: string; me: boolean; time?: string 
 
 export type Block =
   | { t: "p"; text: string }
-  | { t: "dialog"; speaker: string; dir?: string; text: string }
+  | { t: "dialog"; speaker: string; dir?: string; paren?: boolean; text: string }
   | { t: "phone"; title?: string; msgs: PhoneMsg[] }
   | { t: "call"; text: string }
   | { t: "feed"; handle: string; meta: string; body: string; comments: { user: string; text: string }[] }
-  | { t: "system"; title: string; lines: string[] }
+  | { t: "system"; title: string; lines: string[]; rows?: string[][]; note?: string }
   | { t: "email"; subject: string }
   | { t: "caps"; text: string }
   | { t: "cut"; text: string }
-  | { t: "rows"; variant: "characters" | "ledger"; rows: string[][] };
+  | { t: "rows"; variant: "characters" | "ledger" | "table"; rows: string[][] };
 
 export interface ParsedScene {
   kind: SceneKind;
@@ -55,14 +55,18 @@ const RE_FINAL = new RegExp(`^FINAL SHOT\\b\\s*(?:${DASH}\\s*(.*))?$`, "i");
 const RE_STATUS = new RegExp(`^END-OF-EPISODE STATUS\\b\\s*(?:${DASH}\\s*(.*))?$`, "i");
 const RE_POST = new RegExp(`^POST-CREDIT\\s*${DASH}\\s*(.+)$`, "i");
 const RE_NEXT = new RegExp(`^NEXT\\s*${DASH}\\s*EPISODE\\s+(\\d+)\\s*/\\s*(\\d+)`, "i");
-const RE_EPISODE = new RegExp(`^EPISODE\\s+(\\d+)\\s*/\\s*(\\d+)\\s*${DASH}\\s*(.+)$`, "i");
-const RE_ARC = /^ARC\s+(\d+)\s*·\s*(.+)$/i;
+const RE_EPISODE = new RegExp(`^EPISODE\\s+(\\d+)\\s*/\\s*(\\d+)\\s*(?:${DASH}|·)\\s*(.+)$`, "i");
+const RE_SERIES_ARC = new RegExp(`^(.+?)\\s+${DASH}\\s+(ARC\\s+\\d+\\s*[:·]\\s*.+)$`, "i");
+const RE_VISUAL_NOTE = /^Visual\s+\d+\s*·/i;
+const RE_END_NOTES = /^(Evaluasi\b|EPISODE\s+\d+\s*·\s*PROGRESS\b)/i;
+const ID_WORDS = /\b(yang|dan|di|ke|dengan|untuk|itu|ia|tidak|dari|pada|adalah|akan|sebuah)\b/i;
+const RE_ARC = /^ARC\s+(\d+)\s*[:·]\s*(.+)$/i;
 const RE_ARC_PROGRESS = /^ARC PROGRESS\s+(\d+)\s*\/\s*(\d+)/i;
 const RE_META = /^(\d{1,2}:\d{2}\s*[AP]M)\s*·\s*(.+)$/i;
 const RE_VISUAL = /^VISUAL FINAL\s+(\d+)\s*·\s*(.+)$/i;
 const RE_SIAPKAN = /^SIAPKAN\b/i;
 const RE_DIALOG = new RegExp(
-  `^([\\p{Lu}][\\p{L}\\p{N}.'’]*(?:\\s+[\\p{L}\\p{N}.'’]+){0,2})(?:,\\s*([^:“"‟„]{1,40}?))?:\\s*${Q_OPEN}(.+?)${Q_CLOSE}\\s*$`,
+  `^([\\p{Lu}][\\p{L}\\p{N}.'’]*(?:\\s+[\\p{L}\\p{N}.'’]+){0,2})(?:\\s*\\(([^)]{1,100})\\)|,\\s*([^:“"‟„]{1,40}?))?:\\s*${Q_OPEN}(.+?)${Q_CLOSE}\\s*$`,
   "u"
 );
 const RE_PHONE_HEADER = /^(\p{L}[\p{L}\p{N}.'’ ]{0,29}?)\s+[—–-]\s+(\d{1,2}:\d{2}(?:\s*[AP]M)?)\s*$/iu;
@@ -75,6 +79,13 @@ const RE_FEED_COMMENT = /^(@[\w.]+):\s*(.+)$/;
 const RE_SYSTEM = /^EYE OF VALUE\s*·\s*(.+)$/i;
 const RE_CUT = /^CUT TO BLACK\.?$/i;
 const RE_CAPS = /^[^a-z]{8,}$/;
+
+const SMALL = new Set(["a", "an", "the", "of", "and", "or", "to", "in", "on", "at", "for", "by", "with"]);
+/** Judul yang ditulis KAPITAL semua dijadikan Title Case; yang sudah campuran dibiarkan. */
+export function titleCase(t: string): string {
+  if (t !== t.toUpperCase() || !/[A-Z]/.test(t)) return t;
+  return t.toLowerCase().replace(/\p{L}[\p{L}'’]*/gu, (w, off: number) => (off > 0 && SMALL.has(w) ? w : w[0].toUpperCase() + w.slice(1)));
+}
 
 function norm(raw: string): string[] {
   return raw
@@ -89,7 +100,7 @@ const isBlank = (l: string | undefined) => l === undefined || l.trim() === "";
 
 function detectKind(line: string): { kind: SceneKind; number: number; title: string } | null {
   let m = line.match(RE_SCENE);
-  if (m) return { kind: "scene", number: parseInt(m[1], 10), title: m[2].trim() };
+  if (m) return { kind: "scene", number: parseInt(m[1], 10), title: titleCase(m[2].trim()) };
   if ((m = line.match(RE_FINAL))) return { kind: "final", number: 1, title: (m[1] || "").trim() || "Final Shot" };
   if ((m = line.match(RE_STATUS))) return { kind: "status", number: 1, title: (m[1] || "").trim() || "Status Akhir" };
   if ((m = line.match(RE_POST))) return { kind: "post", number: 1, title: m[1].trim() };
@@ -97,11 +108,36 @@ function detectKind(line: string): { kind: SceneKind; number: number; title: str
   return null;
 }
 
+export const KIND_RANK: Record<SceneKind, number> = { scene: 0, final: 1, status: 2, post: 3, next: 4 };
+export const sortOrderOf = (kind: SceneKind, number: number) => KIND_RANK[kind] * 1000 + number;
+
 export function sceneKey(kind: SceneKind, number: number): string {
   return kind === "scene" ? `scene-${number}` : kind;
 }
 
-export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]): ParsedEpisode {
+export interface EpisodeHeader {
+  seriesTitle: string;
+  arcLabel: string;
+  number: number;
+  total: number;
+  title: string;
+  tagline: string;
+  setting: string;
+  arcProgress: string;
+  genres: string[];
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/**
+ * `opts.fallback`: header episode yang sudah ada. Dipakai saat naskah hanya berisi scene tambahan
+ * (tanpa baris header), misalnya menambah Scene 04–07 ke episode yang sudah tersimpan.
+ */
+export function parseEpisode(
+  raw: string,
+  mainCharacters: string[] = ["ethan"],
+  opts: { fallback?: EpisodeHeader } = {}
+): ParsedEpisode {
   const lines = norm(raw);
   const warnings: string[] = [];
 
@@ -110,47 +146,84 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
     throw new ScriptError('Tidak ada scene ditemukan. Periksa format baris SCENE 01 — JUDUL.');
   }
 
+  // Catatan produksi di akhir naskah (evaluasi visual, progres) tidak ikut dibaca pembaca.
+  const endIdx = lines.findIndex((l, i) => i > firstIdx && RE_END_NOTES.test(l.trim()));
+  if (endIdx !== -1) {
+    lines.length = endIdx;
+    warnings.push("Catatan produksi di akhir naskah (Evaluasi/Progress) diabaikan.");
+  }
+
   // ---------- Header ----------
   const head = lines.slice(0, firstIdx).map((l) => l.trim()).filter(Boolean);
   const epIdx = head.findIndex((l) => RE_EPISODE.test(l));
-  if (epIdx === -1) throw new ScriptError('Baris header "EPISODE 06/16 — JUDUL" tidak ditemukan.');
-  const epM = head[epIdx].match(RE_EPISODE)!;
-  const number = parseInt(epM[1], 10);
-  const total = parseInt(epM[2], 10);
-  const title = epM[3].trim();
-
-  const arcLine = head.find((l) => RE_ARC.test(l));
-  const progIdx = head.findIndex((l) => RE_ARC_PROGRESS.test(l));
-  let seriesTitle = head.find((l, i) => i < epIdx && !RE_ARC.test(l)) || "";
-  if (!seriesTitle) {
-    seriesTitle = "The Hidden Tycoon";
-    warnings.push("Judul seri tidak ditemukan di baris pertama; dipakai \"The Hidden Tycoon\".");
-  }
-  if (!arcLine) warnings.push('Baris "ARC NN · NAMA" tidak ditemukan.');
-
-  const between = head.slice(epIdx + 1, progIdx === -1 ? undefined : progIdx);
-  let tagline = "";
-  let setting = "";
-  if (between.length >= 2) {
-    setting = between[between.length - 1];
-    tagline = between.slice(0, -1).join(" ");
-  } else if (between.length === 1) {
-    if (between[0].includes("·")) setting = between[0];
-    else tagline = between[0];
+  let h: EpisodeHeader;
+  if (epIdx === -1) {
+    if (!opts.fallback) throw new ScriptError('Baris header "EPISODE 06/16 — JUDUL" tidak ditemukan.');
+    h = opts.fallback;
   } else {
-    warnings.push("Tagline dan lokasi tidak ditemukan di header.");
+    const epM = head[epIdx].match(RE_EPISODE)!;
+    const number = parseInt(epM[1], 10);
+    const total = parseInt(epM[2], 10);
+    let title = epM[3].trim();
+    let part = "";
+    const pm0 = title.match(/^(.*?)\s*[·|]\s*(PART\s+\d+\s*\/\s*\d+)\s*$/i);
+    if (pm0) {
+      title = pm0[1].trim();
+      part = pm0[2].replace(/\s+/g, " ").replace(/^part/i, "Part");
+    }
+    title = titleCase(title);
+
+    // judul seri + ARC: satu baris ("THE HIDDEN TYCOON — ARC 03: NAMA") atau dua baris
+    let seriesTitle = "";
+    let arcLine = "";
+    const combo = head.slice(0, epIdx).map((l) => l.match(RE_SERIES_ARC)).find(Boolean);
+    if (combo) {
+      seriesTitle = combo[1].trim();
+      arcLine = combo[2].replace(/\s*:\s*/, " · ").trim();
+    } else {
+      arcLine = head.find((l) => RE_ARC.test(l)) || "";
+      seriesTitle = head.find((l, i) => i < epIdx && !RE_ARC.test(l)) || "";
+    }
+    if (!seriesTitle) {
+      seriesTitle = "The Hidden Tycoon";
+      warnings.push('Judul seri tidak ditemukan di baris pertama; dipakai "The Hidden Tycoon".');
+    }
+    if (!arcLine) warnings.push('Baris "ARC NN · NAMA" tidak ditemukan.');
+
+    const progIdx = head.findIndex((l) => RE_ARC_PROGRESS.test(l));
+    let tagline = "";
+    let setting = "";
+    if (progIdx !== -1) {
+      const between = head.slice(epIdx + 1, progIdx);
+      if (between.length >= 2) {
+        setting = between[between.length - 1];
+        tagline = between.slice(0, -1).join(" ");
+      } else if (between.length === 1) {
+        if (between[0].includes("·")) setting = between[0];
+        else tagline = between[0];
+      } else warnings.push("Tagline dan lokasi tidak ditemukan di header.");
+    } else {
+      // tanpa ARC PROGRESS: lokasi = baris pertama bermuatan " · " setelah baris EPISODE; sisanya sebelum itu = tagline
+      const after = head.slice(epIdx + 1);
+      const si = after.findIndex((l) => l.includes(" · "));
+      if (si === -1) warnings.push("Tanggal/lokasi tidak ditemukan di header.");
+      else {
+        setting = after[si];
+        tagline = after.slice(0, si).join(" ");
+      }
+    }
+    let arcProgress = `${pad2(number)} / ${pad2(total)}${part ? ` · ${part}` : ""}`;
+    let genres: string[] = [];
+    if (progIdx !== -1) {
+      const pm = head[progIdx].match(RE_ARC_PROGRESS)!;
+      arcProgress = `${pm[1]} / ${pm[2]}`;
+      const g = head[progIdx + 1];
+      if (g) genres = g.split(/\s*·\s*/).map((x) => x.trim()).filter(Boolean);
+      else warnings.push("Genre tidak ditemukan setelah ARC PROGRESS.");
+    }
+    h = { seriesTitle, arcLabel: arcLine, number, total, title, tagline, setting, arcProgress, genres };
   }
-  let arcProgress = `${number} / ${total}`;
-  let genres: string[] = [];
-  if (progIdx === -1) {
-    warnings.push('Baris "ARC PROGRESS n / N" tidak ditemukan.');
-  } else {
-    const pm = head[progIdx].match(RE_ARC_PROGRESS)!;
-    arcProgress = `${pm[1]} / ${pm[2]}`;
-    const g = head[progIdx + 1];
-    if (g) genres = g.split(/\s*·\s*/).map((s) => s.trim()).filter(Boolean);
-    else warnings.push("Genre tidak ditemukan setelah ARC PROGRESS.");
-  }
+  const { seriesTitle, arcLabel: arcLine, number, total, title, tagline, setting, arcProgress, genres } = h;
 
   // ---------- Badan ----------
   const scenes: ParsedScene[] = [];
@@ -171,7 +244,8 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
     pendingTime = undefined;
   };
   const addPhoneMsg = (from: string, text: string) => {
-    const me = mainCharacters.includes(from.trim().toLowerCase());
+    const f = from.trim().toLowerCase();
+    const me = mainCharacters.some((m) => f === m || f.startsWith(m + " "));
     if (!curPhone) {
       curPhone = { t: "phone", msgs: [] };
       cur!.blocks.push(curPhone);
@@ -187,7 +261,7 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
     if (!line) continue;
 
     // Catatan produksi (tidak tampil ke pembaca)
-    if (RE_SIAPKAN.test(line)) continue;
+    if (RE_SIAPKAN.test(line) || RE_VISUAL_NOTE.test(line)) continue;
     const vis = line.match(RE_VISUAL);
     if (vis) {
       let j = i + 1;
@@ -230,20 +304,57 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
       continue;
     }
 
+    if (cur.kind !== "status" && rawLine.includes("\t") && !RE_SYSTEM.test(line)) {
+      endPhone();
+      const cells = rawLine.split("\t").map((c) => c.trim());
+      const last = cur.blocks[cur.blocks.length - 1];
+      if (last && last.t === "rows" && last.variant === "table") last.rows.push(cells);
+      else cur.blocks.push({ t: "rows", variant: "table", rows: [cells] });
+      continue;
+    }
+
     if (RE_CUT.test(line)) {
       endPhone();
       push({ t: "cut", text: line });
       continue;
     }
 
-    // Kotak sistem
+    // Kotak sistem (judul, baris huruf kapital, tabel bertab, catatan kaki)
     const sys = line.match(RE_SYSTEM);
     if (sys) {
       endPhone();
       const body: string[] = [];
+      const rows: string[][] = [];
       let j = i + 1;
-      while (j < lines.length && !isBlank(lines[j]) && !detectKind(lines[j].trim())) body.push(lines[j++].trim());
-      push({ t: "system", title: `EYE OF VALUE · ${sys[1].trim()}`, lines: body });
+      const isCaps = (t: string) => RE_CAPS.test(t) && /[A-Z]/.test(t) && !RE_CUT.test(t) && !detectKind(t);
+      while (j < lines.length) {
+        const l = lines[j];
+        const t = l.trim();
+        if (!t) {
+          let n = j;
+          while (n < lines.length && isBlank(lines[n])) n++;
+          if (n < lines.length && (lines[n].includes("\t") || isCaps(lines[n].trim()))) {
+            j = n;
+            continue;
+          }
+          break;
+        }
+        if (detectKind(t)) break;
+        if (l.includes("\t")) rows.push(l.split("\t").map((c) => c.trim()));
+        else body.push(t);
+        j++;
+      }
+      let note: string | undefined;
+      if (rows.length > 0) {
+        let n = j;
+        while (n < lines.length && isBlank(lines[n])) n++;
+        const nt = n < lines.length ? lines[n].trim() : "";
+        if (nt.length >= 30 && !/[“”"]/.test(nt) && !ID_WORDS.test(nt) && !detectKind(nt) && !nt.includes("\t")) {
+          note = nt;
+          j = n + 1;
+        }
+      }
+      push({ t: "system", title: `EYE OF VALUE · ${sys[1].trim()}`, lines: body, ...(rows.length ? { rows } : {}), ...(note ? { note } : {}) });
       i = j - 1;
       continue;
     }
@@ -320,8 +431,9 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
     const d = line.match(RE_DIALOG);
     if (d) {
       const speaker = d[1].trim();
-      const dir = d[2]?.trim();
-      const text = d[3].trim();
+      const paren = d[2] !== undefined;
+      const dir = (d[2] ?? d[3])?.trim();
+      const text = d[4].trim();
       const unknown = speaker.toUpperCase() === "UNKNOWN";
       if (unknown || (phoneMode && !dir)) {
         phoneMode = true;
@@ -329,7 +441,7 @@ export function parseEpisode(raw: string, mainCharacters: string[] = ["ethan"]):
       } else {
         endPhone();
         cur.dialogCount++;
-        push({ t: "dialog", speaker, ...(dir ? { dir } : {}), text });
+        push({ t: "dialog", speaker, ...(dir ? { dir, ...(paren ? { paren } : {}) } : {}), text });
       }
       continue;
     }

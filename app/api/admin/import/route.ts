@@ -28,17 +28,18 @@ function summary(p: Awaited<ReturnType<typeof previewImport>>["parsed"]) {
 export async function POST(req: NextRequest) {
   const denied = await requireAdmin(req);
   if (denied) return denied;
-  let body: { text?: string; mode?: "preview" | "save"; confirmRemove?: boolean } = {};
+  let body: { text?: string; mode?: "preview" | "save"; confirmRemove?: boolean; appendTo?: number } = {};
   try {
     body = await req.json();
   } catch {}
   const text = String(body.text || "");
+  const appendTo = Number.isInteger(body.appendTo) ? body.appendTo : undefined;
   if (!text.trim()) return NextResponse.json({ error: "Naskah kosong." }, { status: 400 });
   if (text.length > 2_000_000) return NextResponse.json({ error: "Naskah terlalu besar." }, { status: 413 });
 
   try {
     if (body.mode === "save") {
-      const r = await saveImport(text, !!body.confirmRemove);
+      const r = await saveImport(text, !!body.confirmRemove, appendTo);
       await logEvent(r.keptImages || r.removedSections ? "IM_Reimport_Button" : "IM_Import_Button", r.episodeId, null, {
         sections: r.parsed.totals.sections,
         warnings: r.parsed.warnings.length,
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json({ ok: true, episodeId: r.episodeId, keptImages: r.keptImages, summary: summary(r.parsed) });
     }
-    const pv = await previewImport(text);
+    const pv = await previewImport(text, appendTo);
     return NextResponse.json({
       summary: summary(pv.parsed),
       existing: pv.existing,

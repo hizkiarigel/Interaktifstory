@@ -15,7 +15,14 @@ type Summary = {
 type Removed = { key: string; title: string; hasImage: boolean };
 type Preview = { summary: Summary; existing: { id: number; status: string } | null; keptImages: number; removed: Removed[]; added: string[] };
 
-export default function ImportForm({ initialText = "" }: { initialText?: string }) {
+export default function ImportForm({
+  initialText = "",
+  episodes = [],
+}: {
+  initialText?: string;
+  episodes?: { id: number; number: number; title: string }[];
+}) {
+  const [target, setTarget] = useState<number>(0);
   const [text, setText] = useState(initialText);
   const [pv, setPv] = useState<Preview | null>(null);
   const [error, setError] = useState("");
@@ -29,7 +36,7 @@ export default function ImportForm({ initialText = "" }: { initialText?: string 
       const r = await fetch("/api/admin/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, mode, confirmRemove }),
+        body: JSON.stringify({ text, mode, confirmRemove, appendTo: target || undefined }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -72,6 +79,27 @@ export default function ImportForm({ initialText = "" }: { initialText?: string 
 
   return (
     <div>
+      {episodes.length > 0 && (
+        <div className="field">
+          <label htmlFor="target">Tujuan</label>
+          <select
+            id="target"
+            value={target}
+            onChange={(e) => {
+              setTarget(Number(e.target.value));
+              setPv(null);
+              setSaved(null);
+            }}
+          >
+            <option value={0}>Impor / impor ulang sesuai header naskah</option>
+            {episodes.map((e) => (
+              <option key={e.id} value={e.id}>
+                Tambahkan scene ke Episode {e.number} — {e.title} (tanpa menghapus scene lain)
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="field">
         <label htmlFor="file">File .txt</label>
         <input id="file" type="file" accept=".txt,text/plain" onChange={onFile} />

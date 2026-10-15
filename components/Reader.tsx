@@ -23,6 +23,7 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
   const requestedRef = useRef<Set<number>>(new Set([0, 1]));
   const [imgState, setImgState] = useState<Record<number, ImgState>>({});
   const [listOpen, setListOpen] = useState(false);
+  const [zoom, setZoom] = useState(false);
 
   const mediaRef = useRef<HTMLDivElement>(null);
   const storyRef = useRef<HTMLElement>(null);
@@ -189,6 +190,13 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
     goTo(target);
   };
 
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoom(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [zoom]);
+
   // lembar daftar scene: kunci scroll latar & tutup dengan Escape
   useEffect(() => {
     if (!listOpen) return;
@@ -206,7 +214,7 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
 
   return (
     <div className={`reader ${stack ? "is-stack" : "is-split"}`}>
-      <div className="media" ref={mediaRef} aria-hidden={false}>
+      <div className="media" ref={mediaRef} onClick={() => cur.image && imgState[active] === "ok" && setZoom(true)}>
         {scenes.map((s, i) => {
           const showImg = !!s.image && requested.has(i) && imgState[i] !== "err";
           return (
@@ -308,6 +316,14 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
           ↓
         </button>
       </nav>
+
+      {zoom && cur.image && (
+        <div className="zoom" role="dialog" aria-label="Gambar penuh" onClick={() => setZoom(false)}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imgUrl(cur)} alt={`Ilustrasi ${eyebrow(cur)}: ${cur.title}`} />
+          <button type="button" aria-label="Tutup">✕</button>
+        </div>
+      )}
 
       {listOpen && (
         <div className="sheet-wrap" onClick={() => setListOpen(false)}>

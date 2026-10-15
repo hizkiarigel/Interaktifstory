@@ -17,7 +17,7 @@
   --serif: "Literata", Georgia, "Times New Roman", serif;
   --sans: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --media-h: clamp(190px, 34svh, 300px);
+  --media-h: clamp(210px, 40svh, 360px);
   --bar-h: 58px;
 }
 
@@ -86,6 +86,7 @@ button {
 }
 
 .media {
+  cursor: zoom-in;
   position: relative;
   overflow: hidden;
   background: var(--surface-2);
@@ -107,6 +108,7 @@ button {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: 50% 28%; /* foto portrait: wajah biasanya di sepertiga atas */
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -695,7 +697,7 @@ button {
 }
 .scene-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 12px;
 }
 .sc-card {
@@ -708,7 +710,8 @@ button {
 }
 .sc-thumb {
   position: relative;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 4 / 5;
+  max-height: 260px;
   border-radius: 10px;
   overflow: hidden;
   background: var(--surface-2);
@@ -765,4 +768,69 @@ table.t td {
   padding: 6px 8px;
   border-bottom: 1px solid var(--line);
   text-align: left;
+}
+
+/* ---- kotak sistem bertabel & tabel umum ---- */
+.sys-rows {
+  margin: 10px 0 4px;
+  border-top: 1px solid rgba(207, 227, 255, 0.18);
+}
+.sys-rows .row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(207, 227, 255, 0.12);
+}
+.sys-rows .row + .row {
+  border-top: 0;
+}
+.sys-rows .row span:first-child {
+  color: var(--accent);
+  font-weight: 400;
+}
+.sys-rows .row.head {
+  color: var(--accent);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.74rem;
+}
+.sys-sub {
+  margin-top: 6px;
+  font-weight: 500;
+}
+.sys-note {
+  margin-top: 8px;
+  font-size: 0.74rem;
+  line-height: 1.5;
+  opacity: 0.7;
+}
+.rows.table .row:first-child {
+  background: var(--surface-2);
+  font-weight: 600;
+}
+
+.zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 12, 0.94);
+  animation: fade 0.18s ease;
+}
+.zoom img {
+  max-width: 100%;
+  max-height: 100svh;
+  object-fit: contain;
+}
+.zoom button {
+  position: absolute;
+  top: calc(10px + env(safe-area-inset-top));
+  right: 12px;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 1.1rem;
 }
