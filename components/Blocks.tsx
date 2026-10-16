@@ -8,7 +8,7 @@ export function BlockView({ b }: { b: Block }) {
       return (
         <p className="p dlg">
           {b.speaker}
-          {b.dir ? `, ${b.dir}` : ""}: “{b.text}”
+          {b.dir ? (b.paren ? ` (${b.dir})` : `, ${b.dir}`) : ""}: “{b.text}”
         </p>
       );
     case "phone":
@@ -52,8 +52,24 @@ export function BlockView({ b }: { b: Block }) {
         <aside className="sys">
           <div className="sys-title">{b.title}</div>
           {b.lines.map((l, i) => (
-            <div key={i}>{l}</div>
+            <div key={i} className={i === 0 && b.rows ? "sys-sub" : undefined}>
+              {l}
+            </div>
           ))}
+          {b.rows && (
+            <div className="sys-rows" role="table">
+              {b.rows.map((r, i) => (
+                <div key={i} className={`row${i === 0 ? " head" : ""}`} role="row">
+                  {r.map((c, j) => (
+                    <span key={j} role="cell">
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+          {b.note && <div className="sys-note">{b.note}</div>}
         </aside>
       );
     case "email":

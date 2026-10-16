@@ -23,6 +23,7 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
   const requestedRef = useRef<Set<number>>(new Set([0, 1]));
   const [imgState, setImgState] = useState<Record<number, ImgState>>({});
   const [listOpen, setListOpen] = useState(false);
+  const [zoom, setZoom] = useState(false);
 
   const mediaRef = useRef<HTMLDivElement>(null);
   const storyRef = useRef<HTMLElement>(null);
@@ -55,9 +56,9 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
     const story = storyRef.current;
     if (!media || !story) return;
     const st = stackRef.current;
-    const top = st ? media.getBoundingClientRect().bottom : story.getBoundingClientRect().top;
-    const h = st ? window.innerHeight - top : story.clientHeight;
-    const line = top + 0.4 * h;
+    // HP: gambar jadi latar penuh; scene baru aktif begitu hero-nya naik melewati 62% tinggi layar.
+    // Lebar: judul scene melewati 40% tinggi panel cerita.
+    const line = st ? window.innerHeight * 0.62 : story.getBoundingClientRect().top + 0.4 * story.clientHeight;
     let a = 0;
     for (let i = 0; i < heads.current.length; i++) {
       const el = heads.current[i];
@@ -149,8 +150,7 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
       const behavior: ScrollBehavior = smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto";
       userMoved.current = true;
       if (stackRef.current) {
-        const mh = mediaRef.current?.getBoundingClientRect().height || 0;
-        window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - mh - 14, behavior });
+        window.scrollTo({ top: i === 0 ? 0 : el.getBoundingClientRect().top + window.scrollY, behavior });
       } else {
         const st = storyRef.current!;
         st.scrollTo({ top: el.getBoundingClientRect().top - st.getBoundingClientRect().top + st.scrollTop - 24, behavior });
@@ -180,14 +180,20 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
     let target = active + dir;
     if (dir === -1) {
       const el = heads.current[active];
-      const mh = stackRef.current ? mediaRef.current?.getBoundingClientRect().height || 0 : 0;
-      const ref = stackRef.current ? mh : (storyRef.current?.getBoundingClientRect().top || 0);
+      const ref = stackRef.current ? 0 : storyRef.current?.getBoundingClientRect().top || 0;
       if (el && el.getBoundingClientRect().top < ref - 40) target = active;
     }
     target = Math.max(0, Math.min(scenes.length - 1, target));
     if (!preview) track("RD_SceneNav_Button", ep, keyOf(scenes[target]), { direction: dir === 1 ? "next" : "prev" });
     goTo(target);
   };
+
+  useEffect(() => {
+    if (!zoom) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setZoom(false);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [zoom]);
 
   // lembar daftar scene: kunci scroll latar & tutup dengan Escape
   useEffect(() => {
@@ -206,7 +212,7 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
 
   return (
     <div className={`reader ${stack ? "is-stack" : "is-split"}`}>
-      <div className="media" ref={mediaRef} aria-hidden={false}>
+      <div className="media" ref={mediaRef} onClick={() => cur.image && imgState[active] === "ok" && setZoom(true)}>
         {scenes.map((s, i) => {
           const showImg = !!s.image && requested.has(i) && imgState[i] !== "err";
           return (
@@ -242,18 +248,19 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
             </figure>
           );
         })}
-        <div className="chip">
-          EP {String(ep).padStart(2, "0")} · {active + 1}/{scenes.length}
-        </div>
-        {preview && (
-          <Link href={`/admin/episodes/${episode.id}`} className="chip chip-r">
-            ← Admin{episode.status === "draft" ? " · Draft" : ""}
-          </Link>
-        )}
       </div>
 
+      <div className="chip">
+        EP {String(ep).padStart(2, "0")} · {active + 1}/{scenes.length}
+      </div>
+      {preview && (
+        <Link href={`/admin/episodes/${episode.id}`} className="chip chip-r">
+          ← Admin{episode.status === "draft" ? " · Draft" : ""}
+        </Link>
+      )}
+
       <main className="story" ref={storyRef}>
-        <header className="cover">
+        <header className="cover" ref={(el) => void (heads.current[0] = el)} onClick={() => stackRef.current && cur.image && imgState[active] === "ok" && setZoom(true)}>
           <p className="eyebrow">{episode.seriesTitle}</p>
           <p className="arc">
             {episode.arcLabel} · Episode {episode.arcProgress}
@@ -270,20 +277,41 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
           )}
         </header>
 
-        {scenes.map((s, i) => (
-          <section key={s.id} className={`scene kind-${s.kind}`} aria-labelledby={`h-${keyOf(s)}`}>
-            <div id={keyOf(s)} className="anchor" ref={(el) => void (heads.current[i] = el)}>
+        {scenes.map((s, i) => {
+          const head = (
+            <>
               <p className="eyebrow">{eyebrow(s)}</p>
               {(s.kind === "scene" || (s.title && s.title.toLowerCase() !== LABEL[s.kind]?.toLowerCase())) && (
                 <h2 id={`h-${keyOf(s)}`}>{s.title}</h2>
               )}
               {s.metaPlace && <p className="place">{s.metaPlace}</p>}
-            </div>
-            {s.blocks.map((b, j) => (
-              <BlockView key={j} b={b} />
-            ))}
-          </section>
-        ))}
+            </>
+          );
+          return (
+            <section key={s.id} className={`scene kind-${s.kind}`} aria-labelledby={`h-${keyOf(s)}`}>
+              {i > 0 && (
+                <div
+                  id={keyOf(s)}
+                  className="hero"
+                  ref={(el) => void (heads.current[i] = el)}
+                  onClick={() => stackRef.current && s.image && imgState[i] === "ok" && setZoom(true)}
+                >
+                  <div className="hero-text">{head}</div>
+                </div>
+              )}
+              <div className="panel">
+                {i === 0 && (
+                  <div id={keyOf(s)} className="anchor">
+                    {head}
+                  </div>
+                )}
+                {s.blocks.map((b, j) => (
+                  <BlockView key={j} b={b} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
         <footer className="end">
           <p>{episode.seriesTitle}</p>
         </footer>
@@ -308,6 +336,14 @@ export default function Reader({ episode, preview = false }: { episode: EpisodeD
           ↓
         </button>
       </nav>
+
+      {zoom && cur.image && (
+        <div className="zoom" role="dialog" aria-label="Gambar penuh" onClick={() => setZoom(false)}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imgUrl(cur)} alt={`Ilustrasi ${eyebrow(cur)}: ${cur.title}`} />
+          <button type="button" aria-label="Tutup">✕</button>
+        </div>
+      )}
 
       {listOpen && (
         <div className="sheet-wrap" onClick={() => setListOpen(false)}>

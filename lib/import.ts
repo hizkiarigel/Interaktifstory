@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2";
 import { MAIN_CHARACTERS } from "./config";
 import { db } from "./db";
-import { parseEpisode, sceneKey, type ParsedEpisode } from "./parser";
+import { parseEpisode, sceneKey, sortOrderOf, type EpisodeHeader, type ParsedEpisode } from "./parser";
 
 export interface ImportPreview {
   parsed: ParsedEpisode;
@@ -11,12 +11,26 @@ export interface ImportPreview {
   added: string[];
 }
 
-export function parse(text: string) {
-  return parseEpisode(text, MAIN_CHARACTERS);
+async function headerOf(episodeId: number): Promise<EpisodeHeader | null> {
+  const pool = await db();
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT e.*, s.title AS series_title, s.arc_label FROM episodes e JOIN series s ON s.id = e.series_id WHERE e.id = ?`,
+    [episodeId]
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    seriesTitle: r.series_title, arcLabel: r.arc_label, number: r.number, total: r.total, title: r.title,
+    tagline: r.tagline || "", setting: r.setting || "", arcProgress: r.arc_progress || "",
+    genres: (r.genres || "").split("|").filter(Boolean),
+  };
 }
 
-export async function previewImport(text: string): Promise<ImportPreview> {
-  const parsed = parse(text);
+/** appendTo: id episode tujuan untuk mode "tambah scene" (tanpa menghapus scene lain). */
+export async function previewImport(text: string, appendTo?: number): Promise<ImportPreview> {
+  const fallback = appendTo ? await headerOf(appendTo) : null;
+  if (appendTo && !fallback) throw new Error("Episode tujuan tidak ditemukan.");
+  const parsed = parseEpisode(text, MAIN_CHARACTERS, fallback ? { fallback } : {});
   const pool = await db();
   const [eps] = await pool.query<RowDataPacket[]>(
     `SELECT e.id, e.status FROM episodes e JOIN series s ON s.id = e.series_id WHERE s.title = ? AND e.number = ?`,
@@ -39,7 +53,7 @@ export async function previewImport(text: string): Promise<ImportPreview> {
       oldKeys.add(k);
       if (newKeys.has(k)) {
         if (r.has_image) keptImages++;
-      } else removed.push({ key: k, title: r.title, hasImage: !!r.has_image });
+      } else if (!appendTo) removed.push({ key: k, title: r.title, hasImage: !!r.has_image });
     }
     for (const k of newKeys) if (!oldKeys.has(k)) added.push(k);
   }
@@ -53,8 +67,8 @@ export class NeedsConfirmation extends Error {
 }
 
 /** Simpan sebagai Draft. Bagian dicocokkan lewat (episode, jenis, nomor) agar gambar tetap terpasang. */
-export async function saveImport(text: string, confirmRemove: boolean) {
-  const pv = await previewImport(text);
+export async function saveImport(text: string, confirmRemove: boolean, appendTo?: number) {
+  const pv = await previewImport(text, appendTo);
   if (pv.removed.length > 0 && !confirmRemove) throw new NeedsConfirmation(pv.removed);
   const p = pv.parsed;
   const pool = await db();
@@ -68,13 +82,20 @@ export async function saveImport(text: string, confirmRemove: boolean) {
     );
     const [[serie]] = (await conn.query<RowDataPacket[]>(`SELECT id FROM series WHERE title = ?`, [p.seriesTitle])) as [RowDataPacket[], unknown];
     const genres = p.genres.join("|");
-    await conn.query(
-      `INSERT INTO episodes (series_id, number, total, title, tagline, setting, arc_progress, genres, status, source_text)
-       VALUES (?,?,?,?,?,?,?,?, 'draft', ?)
-       ON DUPLICATE KEY UPDATE total=VALUES(total), title=VALUES(title), tagline=VALUES(tagline),
-         setting=VALUES(setting), arc_progress=VALUES(arc_progress), genres=VALUES(genres), source_text=VALUES(source_text)`,
-      [serie.id, p.number, p.total, p.title, p.tagline, p.setting, p.arcProgress, genres, text]
-    );
+    if (appendTo) {
+      await conn.query(
+        `UPDATE episodes SET source_text = CONCAT(COALESCE(source_text, ''), '\n\n', ?) WHERE id = ?`,
+        [text, appendTo]
+      );
+    } else {
+      await conn.query(
+        `INSERT INTO episodes (series_id, number, total, title, tagline, setting, arc_progress, genres, status, source_text)
+         VALUES (?,?,?,?,?,?,?,?, 'draft', ?)
+         ON DUPLICATE KEY UPDATE total=VALUES(total), title=VALUES(title), tagline=VALUES(tagline),
+           setting=VALUES(setting), arc_progress=VALUES(arc_progress), genres=VALUES(genres), source_text=VALUES(source_text)`,
+        [serie.id, p.number, p.total, p.title, p.tagline, p.setting, p.arcProgress, genres, text]
+      );
+    }
     const [[ep]] = (await conn.query<RowDataPacket[]>(`SELECT id FROM episodes WHERE series_id=? AND number=?`, [serie.id, p.number])) as [RowDataPacket[], unknown];
 
     for (const r of pv.removed) {
@@ -82,7 +103,6 @@ export async function saveImport(text: string, confirmRemove: boolean) {
       await conn.query(`DELETE FROM scenes WHERE episode_id=? AND kind=? AND number=?`, [ep.id, kind, num]);
     }
     const seen = new Set<string>();
-    let order = 0;
     for (const s of p.scenes) {
       const key = sceneKey(s.kind, s.number);
       if (seen.has(key)) continue; // bagian ganda: hanya yang pertama
@@ -92,7 +112,7 @@ export async function saveImport(text: string, confirmRemove: boolean) {
          VALUES (?,?,?,?,?,?,?,?,?)
          ON DUPLICATE KEY UPDATE title=VALUES(title), meta_time=VALUES(meta_time), meta_place=VALUES(meta_place),
            image_hint=VALUES(image_hint), blocks_json=VALUES(blocks_json), sort_order=VALUES(sort_order)`,
-        [ep.id, s.kind, s.number, s.title, s.metaTime, s.metaPlace, s.hint, JSON.stringify(s.blocks), order++]
+        [ep.id, s.kind, s.number, s.title, s.metaTime, s.metaPlace, s.hint, JSON.stringify(s.blocks), sortOrderOf(s.kind, s.number)]
       );
     }
     await conn.commit();
